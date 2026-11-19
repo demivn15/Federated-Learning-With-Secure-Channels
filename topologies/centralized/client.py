@@ -67,8 +67,8 @@ async def run_client(ctx: NodeContext, processed_dir: Path, *, topology_key: str
 
         res = await worker.train(rec.state, training, timer)
         upd = res.update
-        sent = await ctx.send(upstream, "UPDATE", upd.state, round=round_, n_samples=upd.n_samples, tau=upd.tau,
-                              metrics=worker.update_metrics(res, timer))
+        sent = await ctx.send_or_skip(upstream, "UPDATE", upd.state, round=round_, n_samples=upd.n_samples,
+                                      tau=upd.tau, metrics=worker.update_metrics(res, timer)) or ctx.unsent()
         timer.add("serialize", sent.t_serialize_s)
         timer.add("publish_confirm", sent.publish.confirm_s)
         waiting_since = time.perf_counter()

@@ -71,7 +71,7 @@ async def run_coordinator(ctx: NodeContext) -> int:
             # 1–2) elección y verificación
             sent_at: dict[str, int] = {}
             for n in registered:
-                await ctx.send(n, "ELECTION", round=round_, attempt=attempt, selector=selector, candidates=cands,
+                await ctx.send_or_skip(n, "ELECTION", round=round_, attempt=attempt, selector=selector, candidates=cands,
                                **({"scores": scores} if scores is not None else {}))
                 sent_at[n] = time.perf_counter_ns()
             claims: dict[str, str] = {}
@@ -105,7 +105,7 @@ async def run_coordinator(ctx: NodeContext) -> int:
             pool = guard.alive if guard.enabled else set(registered)
             workers = sorted(pool - {agg})
             for n in sorted({agg, *workers}):
-                await ctx.send(n, "ROLE_ASSIGN", round=round_, attempt=attempt,
+                await ctx.send_or_skip(n, "ROLE_ASSIGN", round=round_, attempt=attempt,
                                role="aggregator" if n == agg else "worker", aggregator_id=agg, workers=workers,
                                internal_rounds=internal_rounds, training=params)
             log.info("[coordinator] ronda %d.%d: agregador %s (%s), trabajadores %s", round_, attempt, agg,

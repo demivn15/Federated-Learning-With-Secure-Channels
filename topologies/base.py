@@ -28,7 +28,7 @@ from messaging.contracts import ContractError, ContractValidator
 from messaging.security.primitives import CryptoError
 from messaging.frame import FrameError, Limits, PreparedPayload, decode_message, encode_message
 from messaging.serialization import UnsafePayloadError
-from messaging.transport_amqp import AmqpTransport, Delivery, PublishStats
+from messaging.transport_amqp import AmqpTransport, BrokerLostError, Delivery, PublishStats, TransportError
 from telemetry.kpi_log import KpiLogger
 
 log = logging.getLogger("fl.node")
@@ -82,8 +82,8 @@ class NodeContext:
     security: Any = None                 # TelemetrySigner en S2
     seq: int = 0
     counters: dict[str, int] = field(default_factory=lambda: {"messages_tx": 0, "messages_rx": 0,
-                                                              "messages_rejected": 0, "payload_bytes_tx": 0,
-                                                              "payload_bytes_rx": 0})
+                                                              "messages_rejected": 0, "messages_failed": 0,
+                                                              "payload_bytes_tx": 0, "payload_bytes_rx": 0})
 
     @property
     def experiment_id(self) -> str:
@@ -121,11 +121,39 @@ class NodeContext:
         self.counters["payload_bytes_tx"] += len(frame)
         return Sent(len(frame), t_ser, stats)
 
+    @staticmethod
+    def unsent() -> Sent:
+        """`Sent` vacío para un envío fallido (`send_or_skip` → None): las columnas de la ronda siguen siendo válidas."""
+        return Sent(0, 0.0, PublishStats(0, 0.0))
+
+    async def send_or_skip(self, recipient: str, msg_type: str,
+                           state: Mapping[str, torch.Tensor] | PreparedPayload | None = None, **fields: Any) -> Sent | None:
+        """Como `send`, pero un destinatario inalcanzable (cola llena de un nodo caído o en pausa, *handshake* sin
+        respuesta) no tumba al emisor: se registra en `messages_failed` y devuelve None; el orquestador lo trata
+        como ausente en la ronda (ADR-12). La pérdida del broker sí se propaga (fin del experimento)."""
+        try:
+            return await self.send(recipient, msg_type, state, **fields)
+        except BrokerLostError:
+            raise
+        except TransportError as exc:
+            self.counters["messages_failed"] += 1
+            log.warning("[%s] %s → %s no entregado: %s", self.node_id, msg_type, recipient, exc)
+            return None
+
     async def broadcast(self, msg_type: str, **fields: Any) -> Sent:
         t0 = time.perf_counter()
         frame = encode_message(self.header(msg_type, "*", **fields), None, self.limits)
         t_ser = time.perf_counter() - t0
-        stats = await self.transport.broadcast(frame, msg_type)
+        try:
+            stats = await self.transport.broadcast(frame, msg_type)
+        except BrokerLostError:
+            raise
+        except TransportError as exc:
+            # fanout + `reject-publish`: si la cola de UN nodo (caído o en pausa) está llena, el broker entrega
+            # al resto y devuelve nack al emisor (E9). La difusión es parcial, no un fallo del emisor.
+            self.counters["messages_failed"] += 1
+            log.warning("[%s] difusión de %s parcial: %s", self.node_id, msg_type, exc)
+            stats = PublishStats(len(frame), 0.0)
         self.counters["messages_tx"] += 1
         self.counters["payload_bytes_tx"] += len(frame)
         return Sent(len(frame), t_ser, stats)

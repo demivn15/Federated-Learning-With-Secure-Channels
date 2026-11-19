@@ -31,7 +31,7 @@ from core.model import clone_state
 from core.stopping import build_round_policy
 from core.training import Update
 from evaluation.metrics import binary_metrics, predict_proba
-from messaging.transport_amqp import TransportError
+from messaging.transport_amqp import BrokerLostError, TransportError
 from node.checkpoint import save_checkpoint
 from telemetry.clock import PhaseTimer
 from telemetry.system import NicCounters, ProcessCpu
@@ -85,6 +85,8 @@ class Peer:
         for n in targets:
             try:
                 sent.append(await self.ctx.send(n, msg_type, state, **fields))
+            except BrokerLostError:
+                raise
             except TransportError as exc:          # cola de un par caído llena: no debe tumbar a este par
                 self.publish_failures += 1
                 log.warning("[%s] %s → %s no entregado: %s", self.me, msg_type, n, exc)

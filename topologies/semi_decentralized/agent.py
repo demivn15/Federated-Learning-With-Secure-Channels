@@ -82,7 +82,7 @@ class Agent:
                 except ValueError as exc:            # p. ej. sd_score_hybrid sin puntuaciones: no se responde
                     log.warning("[%s] ELECTION inválida: %s", ctx.node_id, exc)
                     continue
-                await ctx.send(self.coord, "CLAIM", round=h["round"], attempt=h["attempt"], winner=winner,
+                await ctx.send_or_skip(self.coord, "CLAIM", round=h["round"], attempt=h["attempt"], winner=winner,
                                telemetry=declared_telemetry())
                 continue
             if h["role"] == "aggregator":
@@ -102,8 +102,8 @@ class Agent:
             t0 = time.perf_counter()
             res = await worker.train(self.current, training, timer)
             upd = res.update
-            sent = await ctx.send(agg, "UPDATE", upd.state, round=r, sub_round=k, n_samples=upd.n_samples,
-                                  tau=upd.tau, metrics=worker.update_metrics(res, timer))
+            sent = await ctx.send_or_skip(agg, "UPDATE", upd.state, round=r, sub_round=k, n_samples=upd.n_samples,
+                                          tau=upd.tau, metrics=worker.update_metrics(res, timer)) or ctx.unsent()
             timer.add("serialize", sent.t_serialize_s)
             timer.add("publish_confirm", sent.publish.confirm_s)
             if self.cfg.get("checkpoints", {}).get("local"):
@@ -199,8 +199,8 @@ class Agent:
                 payload = prepare_payload(M)
             publish_s = 0.0
             for w in workers:
-                sent = await ctx.send(w, "AGG_MODEL", payload, round=r, sub_round=k)
-                publish_s += sent.publish.confirm_s
+                sent = await ctx.send_or_skip(w, "AGG_MODEL", payload, round=r, sub_round=k)
+                publish_s += sent.publish.confirm_s if sent is not None else 0.0
             timer.add("publish_confirm", publish_s)
 
             t_first = min(arrivals.arrivals.values())
@@ -228,7 +228,7 @@ class Agent:
 
         self.current = M
         recall = sum(last_recalls.values()) / len(last_recalls) if last_recalls else None
-        await ctx.send(self.coord, "AGG_COMPLETE", round=r, attempt=attempt, internal_rounds_done=done,
+        await ctx.send_or_skip(self.coord, "AGG_COMPLETE", round=r, attempt=attempt, internal_rounds_done=done,
                        recall=recall, straggler_s=sum(stragglers) / len(stragglers) if stragglers else None,
                        lateness={w: sum(v) / len(v) for w, v in lateness.items() if v},
                        workers_missing=missing)

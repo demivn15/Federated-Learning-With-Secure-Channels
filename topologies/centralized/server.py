@@ -90,8 +90,9 @@ async def run_server(ctx: NodeContext) -> int:
             payload = prepare_payload(global_state)
         publish_s = {}
         for c in active:
-            sent = await ctx.send(c, "ROUND_START", payload, round=round_, training=params)
-            publish_s[c] = sent.publish.confirm_s
+            sent = await ctx.send_or_skip(c, "ROUND_START", payload, round=round_, training=params)
+            if sent is not None:
+                publish_s[c] = sent.publish.confirm_s
         timer.add("publish_confirm", sum(publish_s.values()))
 
         updates: dict[str, Update] = {}

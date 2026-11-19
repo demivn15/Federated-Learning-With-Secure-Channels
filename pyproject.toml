@@ -25,4 +25,4 @@ testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-markers = ["broker: requiere el broker RabbitMQ de docker/compose.yaml"]
+markers = ["broker: requiere el broker RabbitMQ de docker/compose.yaml", "docker: lanza los nodos en contenedores (imagen fl-node, red fl-net)", "slow: prueba larga (p. ej. 10⁶ derivaciones de clave)"]

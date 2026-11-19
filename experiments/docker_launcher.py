@@ -84,6 +84,19 @@ def check_environment(opts: DockerOptions) -> None:
         raise RuntimeError(f"El broker {opts.broker_container} no está en marcha")
 
 
+def wait_broker_healthy(opts: DockerOptions, timeout_s: float = 180) -> bool:
+    """Espera a que el broker vuelva a estar sano (p. ej. tras un fallo inyectado sobre él)."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        r = _docker("inspect", "-f", "{{.State.Running}} {{.State.Health.Status}}", opts.broker_container)
+        if r.stdout.strip() == "true healthy":
+            return True
+        if r.stdout.startswith("false"):
+            _docker("start", opts.broker_container)
+        time.sleep(2)
+    return False
+
+
 def launch_docker(run_dir: str | Path, experiment_id: str, node_ids: Sequence[str], timeout_s: float, *,
                   processed_dir: str | Path, opts: DockerOptions = DockerOptions(), tls: bool = False,
                   faults: Sequence[Fault] = ()) -> RunResult:
@@ -128,6 +141,8 @@ def launch_docker(run_dir: str | Path, experiment_id: str, node_ids: Sequence[st
     finally:
         if injector is not None:
             injector.stop()
+            if any(f.target == "broker" for f in faults):
+                wait_broker_healthy(opts)          # la limpieza del vhost usa la API del broker
         for n, name in names.items():
             logs = _docker("logs", "--timestamps", name, timeout=60)
             if logs.returncode == 0:

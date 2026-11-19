@@ -10,11 +10,11 @@ Cada nodo:
     de modo que el receptor obtiene una identidad del emisor validada por el broker (`Delivery.sender_user`).
 El nodo no declara exchanges ni colas (permiso `configure` vacío): solo los usa.
 
-Caída del broker (E9; 04 ADR-12): la conexión es *robusta* (aio-pika reconecta sola). Al perderla se emite
-el evento `broker_connection_lost`; si no vuelve en `loss_grace_s`, `recv` lanza `BrokerLostError` y el nodo
-termina de forma limpia y registrada (código 6). Si vuelve, se emite `broker_reconnected` y aumenta
-`generation` (el perfil S2 hace un *handshake* nuevo ⇒ nueva época). Una publicación durante el corte espera
-la reconexión dentro del mismo plazo.
+Caída del broker (E9; 04 ADR-12): al perder la conexión se emite `broker_connection_lost` y el transporte
+reintenta conectarse (de forma pasiva: conexión, canal y consumidor, sin declarar nada). Si no lo logra en
+`loss_grace_s`, `recv` lanza `BrokerLostError` y el nodo termina de forma limpia y registrada (código 6). Si
+vuelve, se emite `broker_reconnected` y aumenta `generation` (el perfil S2 hace un *handshake* nuevo ⇒
+nueva época). Una publicación durante el corte espera la reconexión dentro del mismo plazo.
 """
 from __future__ import annotations
 
@@ -92,7 +92,7 @@ class AmqpTransport:
         self.on_event = on_event
         self.loss_grace_s = float(broker_cfg.get("loss_grace_s", 30))
         self.generation = 0                      # aumenta en cada (re)conexión
-        self._conn: aio_pika.abc.AbstractRobustConnection | None = None
+        self._conn: aio_pika.abc.AbstractConnection | None = None
         self._inbox: asyncio.Queue[Any] = asyncio.Queue()
         self._consumer_tag: str | None = None
         self._up = asyncio.Event()
@@ -108,45 +108,68 @@ class AmqpTransport:
 
     # -------------------------------------------------------------- ciclo de vida
     async def connect(self) -> None:
-        # Al reconectar (p. ej. tras un corte de red), las entregas pendientes del canal anterior ya no se
-        # pueden confirmar: el broker las reencola y se reciben de nuevo en el canal nuevo.
+        """Primera conexión (o reconexión explícita tras `close`). Lanza si el broker no responde."""
         self._inbox = asyncio.Queue()
         self._closing, self._fatal = False, None
-        self._conn = await aio_pika.connect_robust(
-            self.url, heartbeat=int(self.cfg["heartbeat_s"]), ssl_context=self.ssl_context,
-            client_properties={"connection_name": f"fl-node-{self.node_id}"})
-        self._conn.close_callbacks.add(self._on_close)
-        self._conn.reconnect_callbacks.add(self._on_reconnect)
-        self._channel = await self._conn.channel(publisher_confirms=True, on_return_raises=True)
-        await self._channel.set_qos(prefetch_count=int(self.cfg["prefetch"]))
-        self._unicast = await self._channel.get_exchange(self.cfg["unicast_exchange"], ensure=False)
-        self._broadcast = await self._channel.get_exchange(self.cfg["broadcast_exchange"], ensure=False)
-        self._queue = await self._channel.get_queue(f"q.{self.node_id}", ensure=False)
-        self._consumer_tag = await self._queue.consume(self._on_message, no_ack=False)
+        await self._open()
         self.generation += 1
         self._up.set()
 
-    def _on_close(self, _sender: Any, exc: BaseException | None = None) -> None:
-        if self._closing or not self._up.is_set():
-            return
+    async def _open(self) -> None:
+        # Reconexión PROPIA en vez de la restauración de `connect_robust`: aio-pika vuelve a declarar la cola
+        # al restaurar el canal, y con el permiso `configure` vacío (ADR-03) el broker cierra el canal ⇒ el
+        # nodo quedaba conectado pero sin consumir (detectado en E9 al reiniciar el broker). Aquí todo es
+        # pasivo: se reabre la conexión, el canal, los exchanges y el consumidor, sin declarar nada.
+        conn = await aio_pika.connect(
+            self.url, heartbeat=int(self.cfg["heartbeat_s"]), ssl_context=self.ssl_context,
+            client_properties={"connection_name": f"fl-node-{self.node_id}"})
+        try:
+            channel = await conn.channel(publisher_confirms=True, on_return_raises=True)
+            await channel.set_qos(prefetch_count=int(self.cfg["prefetch"]))
+            unicast = await channel.get_exchange(self.cfg["unicast_exchange"], ensure=False)
+            broadcast = await channel.get_exchange(self.cfg["broadcast_exchange"], ensure=False)
+            queue = await channel.get_queue(f"q.{self.node_id}", ensure=False)
+            self._consumer_tag = await queue.consume(self._on_message, no_ack=False)
+        except BaseException:
+            await conn.close()
+            raise
+        self._conn, self._channel, self._unicast, self._broadcast, self._queue = conn, channel, unicast, broadcast, queue
+        conn.close_callbacks.add(self._on_close)
+
+    def _on_close(self, sender: Any, exc: BaseException | None = None) -> None:
+        if self._closing or sender is not self._conn or not self._up.is_set():
+            return                                  # cierre propio o de una conexión anterior
         self._up.clear()
         self._lost_at = time.perf_counter()
         self._event("broker_connection_lost", error=f"{type(exc).__name__}: {exc}" if exc else None,
                     grace_s=self.loss_grace_s)
-        self._watchdog = asyncio.get_running_loop().create_task(self._await_recovery())
+        self._watchdog = asyncio.get_running_loop().create_task(self._recover())
 
-    def _on_reconnect(self, _sender: Any, *_: Any) -> None:
-        self.generation += 1
-        down = time.perf_counter() - self._lost_at if self._lost_at is not None else None
-        self._up.set()
-        if self._watchdog is not None:
-            self._watchdog.cancel()
-        self._event("broker_reconnected", downtime_s=down, generation=self.generation)
-
-    async def _await_recovery(self) -> None:
-        try:
-            await asyncio.wait_for(self._up.wait(), self.loss_grace_s)
-        except asyncio.TimeoutError:
+    async def _recover(self) -> None:
+        """Reintenta la conexión cada `reconnect_interval_s` hasta `loss_grace_s`. Los mensajes ya recibidos
+        del canal anterior se conservan: si el broker sigue vivo los reentrega (duplicados que los receptores
+        descartan por ronda/seq); si se reinició, los no persistentes se han perdido y solo quedan esos."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.loss_grace_s
+        interval = float(self.cfg.get("reconnect_interval_s", 2))
+        while not self._closing:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(interval, remaining))
+            try:
+                await asyncio.wait_for(self._open(), max(1.0, deadline - loop.time()))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:                # broker aún caído: se reintenta
+                log.debug("[%s] reconexión fallida: %s", self.node_id, exc)
+                continue
+            self.generation += 1
+            self._up.set()
+            self._event("broker_reconnected", downtime_s=time.perf_counter() - self._lost_at,
+                        generation=self.generation)
+            return
+        if not self._closing:
             self._fatal = BrokerLostError(f"Sin broker durante {self.loss_grace_s:.0f} s")
             self._event("broker_lost", waited_s=self.loss_grace_s)
             self._inbox.put_nowait(_FATAL)
@@ -190,12 +213,40 @@ class AmqpTransport:
             try:
                 await asyncio.wait_for(self._up.wait(), self.loss_grace_s)
             except asyncio.TimeoutError:
-                raise BrokerLostError(f"Sin broker durante {self.loss_grace_s:.0f} s (publicación)") from None
+                if self._fatal is None:          # detectado al publicar, antes que el vigilante de recepción
+                    self._fatal = BrokerLostError(f"Sin broker durante {self.loss_grace_s:.0f} s (publicación)")
+                    self._event("broker_lost", waited_s=self.loss_grace_s, path="publish")
+                    self._inbox.put_nowait(_FATAL)
+                raise self._fatal from None
+            if self._fatal is not None:
+                raise self._fatal
 
-    async def _publish(self, exchange: Any, routing_key: str, msg: aio_pika.Message) -> PublishStats:
+    async def _connection_cancelled(self) -> bool:
+        """¿La `CancelledError` viene de aiormq (cancela la confirmación pendiente al cerrar una conexión colgada,
+        p. ej. heartbeat perdido) y no de una cancelación de esta tarea? Solo entonces es un corte (E9).
+
+        Python ≥ 3.11: una cancelación de la tarea incrementa `cancelling()`; la del future de aiormq no.
+        Python 3.10 (Pi): sin `cancelling()`, se espera hasta 1 s a que la conexión conste como cerrada (el
+        aviso de cierre puede llegar un poco después de la cancelación)."""
+        if self._closing:
+            return False
+        cancelling = getattr(asyncio.current_task(), "cancelling", None)
+        if cancelling is not None:
+            return cancelling() == 0
+        for _ in range(10):
+            if self._conn is None or self._conn.is_closed or not self._up.is_set():
+                return True
+            await asyncio.sleep(0.1)
+        return False
+
+    async def _publish(self, which: str, routing_key: str, msg: aio_pika.Message) -> PublishStats:
+        """`which` = "unicast" | "broadcast": el exchange se resuelve en cada intento, porque tras una
+        reconexión pertenece al canal nuevo."""
         await self._wait_up()
         t0 = time.perf_counter()
-        for attempt in (1, 2):
+        attempts = 0
+        while True:
+            exchange = self._unicast if which == "unicast" else self._broadcast
             try:
                 await exchange.publish(msg, routing_key=routing_key, mandatory=True,
                                        timeout=float(self.cfg["publish_timeout_s"]))
@@ -204,10 +255,13 @@ class AmqpTransport:
                 raise TransportError(f"Publicación rechazada hacia {routing_key or '*'}: {exc}") from exc
             except asyncio.TimeoutError as exc:
                 raise TransportError(f"Sin confirmación del broker hacia {routing_key or '*'}") from exc
-            except (AMQPError, ConnectionError, RuntimeError) as exc:
-                # La conexión cayó durante la publicación: se espera la reconexión y se reintenta una vez
-                # (el receptor descarta duplicados por ronda/seq).
-                if attempt == 2:
+            except (AMQPError, ConnectionError, RuntimeError, asyncio.CancelledError) as exc:
+                # La conexión cayó durante la publicación: se espera la reconexión y se reintenta
+                # (el receptor descarta duplicados por ronda/seq). El plazo total lo acota `loss_grace_s`.
+                if isinstance(exc, asyncio.CancelledError) and not await self._connection_cancelled():
+                    raise
+                attempts += 1
+                if attempts > 3:
                     raise TransportError(f"Publicación fallida hacia {routing_key or '*'}: {exc}") from exc
                 log.warning("[%s] publicación interrumpida (%s); se reintenta tras la reconexión", self.node_id, exc)
                 await asyncio.sleep(0.5)
@@ -216,11 +270,11 @@ class AmqpTransport:
 
     async def send(self, recipient: str, frame: bytes, msg_type: str,
                    message_id: str | None = None, content_type: str = CONTENT_TYPE) -> PublishStats:
-        return await self._publish(self._unicast, recipient, self._message(frame, msg_type, message_id, content_type))
+        return await self._publish("unicast", recipient, self._message(frame, msg_type, message_id, content_type))
 
     async def broadcast(self, frame: bytes, msg_type: str, message_id: str | None = None,
                         content_type: str = CONTENT_TYPE) -> PublishStats:
-        return await self._publish(self._broadcast, "", self._message(frame, msg_type, message_id, content_type))
+        return await self._publish("broadcast", "", self._message(frame, msg_type, message_id, content_type))
 
     # -------------------------------------------------------------- recepción
     async def recv(self, timeout: float | None = None) -> Delivery:

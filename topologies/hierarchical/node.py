@@ -79,8 +79,8 @@ async def run_root(ctx: NodeContext, tree: Tree) -> int:
             recipients = [agg] if tree.redistribution == "via_cluster_aggregators" else members
             for n in recipients:
                 extra = {"members": members} if n == agg else {}
-                sent = await ctx.send(n, "ROUND_START", payload, round=round_, training=params, **extra)
-                publish_s += sent.publish.confirm_s
+                sent = await ctx.send_or_skip(n, "ROUND_START", payload, round=round_, training=params, **extra)
+                publish_s += sent.publish.confirm_s if sent is not None else 0.0
         timer.add("publish_confirm", publish_s)
 
         received: dict[str, Update] = {}
@@ -190,8 +190,8 @@ async def run_cluster_aggregator(ctx: NodeContext, tree: Tree, processed_dir: Pa
             with timer.phase("serialize"):
                 payload = prepare_payload(rec.state)
             for leaf in leaves:
-                sent = await ctx.send(leaf, "ROUND_START", payload, round=round_, training=training)
-                publish_s += sent.publish.confirm_s
+                sent = await ctx.send_or_skip(leaf, "ROUND_START", payload, round=round_, training=training)
+                publish_s += sent.publish.confirm_s if sent is not None else 0.0
 
         # 2) entrenamiento propio (doble rol de D0)
         updates: dict[str, Update] = {}
@@ -238,10 +238,11 @@ async def run_cluster_aggregator(ctx: NodeContext, tree: Tree, processed_dir: Pa
         save_checkpoint(ctx.run_dir, ctx.node_id, round_, 0, "cluster", cu.state,
                         {"cluster_id": cluster.cluster_id, "members": sorted(updates), "missing": missing,
                          "n_samples": cu.n_samples, "tau": cu.tau})
-        sent = await ctx.send(tree.root, "CLUSTER_UPDATE", cu.state, round=round_, cluster_id=cluster.cluster_id,
-                              n_samples=cu.n_samples, tau=cu.tau, sum_n_tau=cu.n_samples * cu.tau,
-                              members=sorted(updates), missing=missing,
-                              metrics={"train_loss": cu.train_loss, "train_time_s": timer.seconds("train")})
+        sent = await ctx.send_or_skip(tree.root, "CLUSTER_UPDATE", cu.state, round=round_,
+                                      cluster_id=cluster.cluster_id, n_samples=cu.n_samples, tau=cu.tau,
+                                      sum_n_tau=cu.n_samples * cu.tau, members=sorted(updates), missing=missing,
+                                      metrics={"train_loss": cu.train_loss, "train_time_s": timer.seconds("train")}) \
+            or ctx.unsent()
         timer.add("serialize", sent.t_serialize_s)
         publish_s += sent.publish.confirm_s
         timer.add("publish_confirm", publish_s)

@@ -30,8 +30,8 @@ from typing import Any, Callable
 
 ACTIONS = ("kill", "stop", "pause", "restart", "disconnect", "netem", "start")
 REVERT = {"pause": "unpause", "disconnect": "connect", "netem": "netem_clear", "stop": "start"}
-EVENT_ACTION = {"kill": ("kill",), "stop": ("die", "stop"), "pause": ("pause",), "unpause": ("unpause",),
-                "restart": ("restart",), "start": ("start",), "disconnect": ("disconnect",),
+EVENT_ACTION = {"kill": ("kill",), "stop": ("kill", "die", "stop"), "pause": ("pause",), "unpause": ("unpause",),
+                "restart": ("kill", "die", "restart"), "start": ("start",), "disconnect": ("disconnect",),
                 "connect": ("connect",), "netem": ("exec_start",), "netem_clear": ("exec_start",)}
 
 
@@ -60,24 +60,25 @@ def _run(args: list[str], timeout: float = 60) -> subprocess.CompletedProcess:
     return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
 
 
-def _event_time_ns(container: str, actions: tuple[str, ...], since_host_s: float) -> int | None:
-    """`timeNano` del último evento de `container` con una de `actions`, según el demonio."""
+def _events(container: str, actions: tuple[str, ...], since_host_s: float) -> set[int]:
+    """`timeNano` de los eventos de `container` con una de `actions` desde `since_host_s` (margen de 10 s por
+    el desfase entre el reloj del PC y el de la VM de Docker)."""
     res = _run(["docker", "events", "--since", f"{since_host_s - 10:.0f}", "--until", f"{time.time() + 2:.0f}",
                 "--format", "{{json .}}"], timeout=30)
-    best = None
+    ident = _run(["docker", "inspect", "-f", "{{.Id}}", container]).stdout.strip()   # los eventos de red usan el ID
+    out = set()
     for line in res.stdout.splitlines():
         try:
             ev = json.loads(line)
         except json.JSONDecodeError:
             continue
         attrs = ev.get("Actor", {}).get("Attributes", {})
-        names = {attrs.get("name"), attrs.get("container"), ev.get("id"), ev.get("Actor", {}).get("ID")}
-        if container not in names and not any(n and str(n).startswith(container) for n in names if n):
+        if not ({container, ident} & {attrs.get("name"), attrs.get("container"), ev.get("id")} - {None, ""}):
             continue
         act = str(ev.get("Action", ""))
         if any(act == a or act.startswith(a) for a in actions) and ev.get("timeNano"):
-            best = max(best or 0, int(ev["timeNano"]))
-    return best
+            out.add(int(ev["timeNano"]))
+    return out
 
 
 class FaultInjector:
@@ -117,9 +118,14 @@ class FaultInjector:
         }[action]
 
     def _do(self, action: str, f: Fault) -> None:
+        # La hora del fallo es el PRIMER evento nuevo que provoca la acción (p. ej. `kill` antes que `die` y
+        # `stop`): se comparan los eventos antes y después para no confundirlo con eventos anteriores.
+        name, kinds = self.containers[f.target], EVENT_ACTION[action]
         since = time.time()
+        before = _events(name, kinds, since)
         res = _run(self._command(action, f))
-        t_daemon = _event_time_ns(self.containers[f.target], EVENT_ACTION[action], since)
+        new = _events(name, kinds, since) - before
+        t_daemon = min(new) if new else None
         rec = {"action": action, "target": f.target, "label": f.label, "netem": f.netem or None,
                "ok": res.returncode == 0, "stderr": res.stderr.strip()[:300] or None,
                "t_daemon_ns": t_daemon, "t_host_ns": int(since * 1e9),
