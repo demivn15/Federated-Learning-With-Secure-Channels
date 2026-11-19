@@ -1,7 +1,12 @@
-"""Ejecuta un experimento completo en local: manifiesto → broker → nodos → recogida → evaluación → limpieza.
+"""Ejecuta un experimento completo: manifiesto → broker → nodos → recogida → evaluación → limpieza.
 
     python scripts/run_experiment.py --topology centralized --method fedavg [--seed 42]
            [--rounds N] [--epochs E] [--threads 2] [--variant model_120_84 ...] [--id nombre]
+           [--security S0|S1|S2] [--launcher local|docker] [--cpus 1.5 --memory 2g]
+
+`--launcher docker` lanza un contenedor `fl-node` por nodo en la red del broker (E9/E10; ver
+`experiments/docker_launcher.py`); `local`, un proceso por nodo en este PC. `--security` fija el perfil
+(ADR-05): S1/S2 copian la CA del broker a `<run>/security/` y S2 genera además las identidades de los nodos.
 
 `--rounds` y `--epochs` sobrescriben la referencia (pruebas rápidas); sin ellos se usa la referencia de D0
 (centralizada: 12 rondas, 3 épocas). La corrida queda en `results/runs/<id>/`.
@@ -22,8 +27,11 @@ from broker.provision_broker import admin_from_env  # noqa: E402
 from core.config import PROJECT_ROOT, load_config  # noqa: E402
 from experiments.collect import collect_kpis  # noqa: E402
 from experiments.evaluate_run import evaluate_run  # noqa: E402
+from experiments.collect import CollectError  # noqa: E402
 from experiments.manifest import build_manifest  # noqa: E402
 from experiments.runner import RUNS_ROOT, launch_local, prepare_run, teardown  # noqa: E402
+from messaging.security import PROFILES, uses_e2e, uses_tls  # noqa: E402
+from scripts.provision_identities import TLS_DIR, provision_node_identities  # noqa: E402
 
 
 def make_config(variants, rounds=None, epochs=None, topology="centralized", overrides=None) -> dict:
@@ -53,15 +61,35 @@ def run_experiment(topology: str, method: str, *, seed: int = 42, rounds: int | 
                    epochs: int | None = None, threads: int | None = None, variants=(), experiment_id=None,
                    processed_dir: Path = PROJECT_ROOT / "data" / "processed", runs_root: Path = RUNS_ROOT,
                    timeout_s: float = 3600, command_overrides: dict | None = None,
-                   config_overrides: dict | None = None, study: str | None = None) -> dict:
+                   config_overrides: dict | None = None, study: str | None = None,
+                   security_profile: str = "S0", launcher: str = "local", docker_opts=None,
+                   faults=()) -> dict:
+    if security_profile not in PROFILES:
+        raise ValueError(f"Perfil de seguridad desconocido: {security_profile}")
     cfg = make_config(list(variants), rounds, epochs, topology, config_overrides)
     cfg["data"]["seed"] = seed
+    cfg["communication"]["security_profile"] = security_profile
     exp_id = experiment_id or f"{topology[:4]}-{method}-s{seed}-{datetime.now():%Y%m%d%H%M%S}-{uuid.uuid4().hex[:4]}"
+    extra = {"launcher": launcher}
+    if launcher == "docker":
+        from experiments.docker_launcher import DockerOptions
+        docker_opts = docker_opts or DockerOptions(threads=threads)
+        extra.update({"image": docker_opts.image, "cpus": docker_opts.cpus, "memory": docker_opts.memory})
     manifest = build_manifest(cfg, experiment_id=exp_id, topology=topology, method=method, seed=seed,
-                              processed_dir=processed_dir, study=study)
+                              processed_dir=processed_dir, study=study, security_profile=security_profile,
+                              extra=extra)
     nodes = participants(cfg, topology)
     admin = admin_from_env()
     run_dir = prepare_run(manifest, nodes, runs_root=runs_root, broker_admin=admin)
+    if uses_tls(security_profile):
+        sec_dir = run_dir / "security"
+        sec_dir.mkdir(exist_ok=True)
+        ca = TLS_DIR / "ca.pem"
+        if not ca.exists():
+            raise FileNotFoundError(f"Falta {ca}: python scripts/provision_identities.py tls")
+        (sec_dir / "ca.pem").write_bytes(ca.read_bytes())
+        if uses_e2e(security_profile):
+            provision_node_identities(sec_dir, nodes)
     command_overrides = command_overrides or {}
 
     def command(rd: Path, node: str) -> list[str]:
@@ -74,7 +102,16 @@ def run_experiment(topology: str, method: str, *, seed: int = 42, rounds: int | 
     try:
         # El servidor arranca primero en la lista para que su cola esté consumiéndose cuanto antes
         order = (["infra"] if "infra" in nodes else []) + [n for n in nodes if n != "infra"]
-        result = launch_local(run_dir, order, timeout_s=timeout_s, command=command)
+        if launcher == "docker":
+            from experiments.docker_launcher import launch_docker
+            result = launch_docker(run_dir, exp_id, order, timeout_s, processed_dir=processed_dir,
+                                   opts=docker_opts, tls=uses_tls(security_profile), faults=faults)
+        elif launcher == "local":
+            if faults:
+                raise ValueError("La inyección de fallos requiere --launcher docker")
+            result = launch_local(run_dir, order, timeout_s=timeout_s, command=command)
+        else:
+            raise ValueError(f"Lanzador desconocido: {launcher}")
     finally:
         teardown(manifest, admin)
     out = {"run_dir": run_dir, "result": result}
@@ -83,6 +120,11 @@ def run_experiment(topology: str, method: str, *, seed: int = 42, rounds: int | 
     if lead_ok:
         out["kpis"] = collect_kpis(run_dir)
         out["evaluation"] = evaluate_run(run_dir, processed_dir)
+    else:
+        try:                                    # corridas interrumpidas (E9): los KPIs parciales sirven igual
+            out["kpis"] = collect_kpis(run_dir)
+        except CollectError:
+            pass
     return out
 
 
@@ -98,10 +140,19 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--id")
     ap.add_argument("--study")
     ap.add_argument("--timeout", type=float, default=3600)
+    ap.add_argument("--security", default="S0", choices=list(PROFILES))
+    ap.add_argument("--launcher", default="local", choices=["local", "docker"])
+    ap.add_argument("--cpus", type=float, help="docker: límite de CPU por nodo")
+    ap.add_argument("--memory", help="docker: límite de memoria por nodo (p. ej. 2g)")
     args = ap.parse_args(argv)
+    docker_opts = None
+    if args.launcher == "docker":
+        from experiments.docker_launcher import DockerOptions
+        docker_opts = DockerOptions(cpus=args.cpus, memory=args.memory, threads=args.threads)
     out = run_experiment(args.topology, args.method, seed=args.seed, rounds=args.rounds, epochs=args.epochs,
                          threads=args.threads, variants=args.variant, experiment_id=args.id,
-                         timeout_s=args.timeout, study=args.study)
+                         timeout_s=args.timeout, study=args.study, security_profile=args.security,
+                         launcher=args.launcher, docker_opts=docker_opts)
     res = out["result"]
     print(f"Corrida: {out['run_dir']}")
     print(f"Códigos de salida: {res.exit_codes} · duración del servidor {res.durations_s.get('infra', 0):.1f} s")

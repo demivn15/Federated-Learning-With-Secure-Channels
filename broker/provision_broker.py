@@ -44,9 +44,10 @@ class NodeCredentials:
     password: str
     vhost: str
 
-    def amqp_url(self, host: str = "127.0.0.1", port: int = 5673) -> str:
+    def amqp_url(self, host: str = "127.0.0.1", port: int = 5673, tls: bool = False) -> str:
         q = urllib.parse.quote
-        return f"amqp://{q(self.username, safe='')}:{q(self.password, safe='')}@{host}:{port}/{q(self.vhost, safe='')}"
+        scheme = "amqps" if tls else "amqp"
+        return f"{scheme}://{q(self.username, safe='')}:{q(self.password, safe='')}@{host}:{port}/{q(self.vhost, safe='')}"
 
 
 class BrokerAdmin:
@@ -139,6 +140,7 @@ class BrokerAdmin:
 
 
 DEV_AMQP_PORT = 5673    # docker/compose.yaml publica el broker en 5673/15673
+DEV_AMQPS_PORT = 5674   # listener TLS (5671 dentro de la red de contenedores)
 DEV_API_URL = "http://127.0.0.1:15673/api"
 
 

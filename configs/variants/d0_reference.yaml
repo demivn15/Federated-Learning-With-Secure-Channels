@@ -202,6 +202,8 @@ communication:
     heartbeat_s: 30
     publish_timeout_s: 30
     validated_user_id: true              # el broker comprueba user_id = usuario de la conexión (verificado en E3)
+    loss_grace_s: 30                     # [REC ADR-12, E9] sin broker durante este plazo => el nodo termina (código 6)
+    tls_port: 5671                       # [E10] listener AMQPS (S1/S2) dentro de la red del broker
   control_format: json                   # [USR Q-03] formato del proyecto base (P1/P3)
   parameter_format: pickle               # [USR Q-03] + [D0 §3.4]; justificación en 04 ADR-04
   pickle_protocol: 4                     # [COD] P1/P3 llaman a pickle.dumps() sin protocolo = DEFAULT_PROTOCOL (4 en Python 3.8+); se fija explícito para que M sea estable
@@ -213,6 +215,9 @@ communication:
     max_payload_bytes: 4194304
   schema_validation: true                # [RF-16] false solo para medir su coste (RF-30)
   security_profile: S0                   # [REC] reproducción sin seguridad (D0 no tenía); S1/S2 en otros estudios
+  security:                              # [REC 04 ADR-05] parámetros de S2 (E10)
+    handshake_timeout_s: 60              # espera máxima de un handshake por par (RNF-06)
+    replay_window: 64                    # W: ventana anti-replay por (emisor, época)
   message_pattern: unicast               # [REC 04 §4.5]
 
 # -----------------------------------------------------------------------------

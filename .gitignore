@@ -13,3 +13,6 @@ identities/
 broker_credentials/
 inventory.yaml
 docker/.env
+
+# TLS del broker (E10)
+docker/tls/

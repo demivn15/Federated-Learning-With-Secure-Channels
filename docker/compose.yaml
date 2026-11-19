@@ -1,8 +1,14 @@
-# Broker RabbitMQ para desarrollo local (E3). En el clúster corre en la 6.ª Pi (04 ADR-03).
-# Uso:  python scripts/broker_env.py   (genera docker/.env con credenciales aleatorias, una vez)
+# Broker RabbitMQ para desarrollo local (E3) y red de los nodos en contenedores (E9, E10).
+# En el clúster corre en la 6.ª Pi (04 ADR-03).
+# Uso (una vez):
+#       python scripts/broker_env.py                    # docker/.env con credenciales de administrador
+#       python scripts/provision_identities.py tls      # docker/tls/: CA + certificado del broker (S1/S2)
+#       docker build -f docker/node.Dockerfile -t fl-node:dev docker      # imagen de los nodos
 #       docker compose -f docker/compose.yaml up -d
-# Los puertos se publican solo en 127.0.0.1, en 5673/15673 (no en los estándar 5672/15672) porque en el PC
-# de desarrollo ya existe un servicio RabbitMQ nativo de Windows que ocupa esos puertos.
+# Los puertos se publican solo en 127.0.0.1, en 5673/5674/15673 (no en los estándar) porque en el PC de
+# desarrollo ya existe un servicio RabbitMQ nativo de Windows que ocupa 5672/15672.
+# Los nodos en contenedores (experiments/docker_launcher.py) se unen a la red `fl-net` y llegan al broker
+# como `fl-rabbitmq:5672` (S0) o `fl-rabbitmq:5671` (AMQPS, S1/S2).
 name: fl-benchmark
 
 services:
@@ -12,13 +18,20 @@ services:
     hostname: fl-rabbitmq
     env_file: .env                      # RABBITMQ_DEFAULT_USER / RABBITMQ_DEFAULT_PASS (administrador)
     ports:
-      - "127.0.0.1:5673:5672"           # AMQP
+      - "127.0.0.1:5673:5672"           # AMQP (S0)
+      - "127.0.0.1:5674:5671"           # AMQPS (S1/S2)
       - "127.0.0.1:15673:15672"         # API de gestión (aprovisionamiento y métricas del broker)
     volumes:
       - ./rabbitmq.conf:/etc/rabbitmq/conf.d/90-fl-benchmark.conf:ro
+      - ./tls:/etc/rabbitmq/tls:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
       interval: 5s
       timeout: 10s
       retries: 24
     mem_limit: 1g                       # aproxima el presupuesto que tendrá en la 6.ª Pi junto al rol
+    cap_add: [NET_ADMIN]                # E9: netem también en el lado del broker
+
+networks:
+  default:
+    name: fl-net

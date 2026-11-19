@@ -21,6 +21,8 @@ COMMON_COLUMNS: tuple[str, ...] = (
     # comunicación
     "payload_bytes_tx", "payload_bytes_rx", "nic_bytes_tx", "nic_bytes_rx", "messages_tx", "messages_rx",
     "messages_rejected",
+    # seguridad E2E (perfil S2; vacías en S0/S1): coste por fase (RNF-05) y rechazos del canal seguro
+    "t_encrypt_s", "t_decrypt_s", "t_handshake_s", "handshakes", "sec_rejected",
     # sistema
     "cpu_percent_legacy_before", "cpu_percent_legacy_after", "cpu_process_s", "cpu_process_percent_core",
     "cpu_process_percent_total", "ram_rss_mb_before", "ram_rss_mb_after", "temperature_c", "cpu_freq_mhz",

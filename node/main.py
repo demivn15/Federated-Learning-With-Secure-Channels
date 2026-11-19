@@ -1,14 +1,19 @@
 """Punto de entrada único de un nodo (analisis_arquitectonico/05 §3.6).
 
     python -m node.main --run-dir results/runs/<exp> --node CN1 [--processed data/processed]
-                        [--amqp-host 127.0.0.1 --amqp-port 5673] [--threads N]
+                        [--amqp-host 127.0.0.1 --amqp-port 5673] [--threads N] [--security-dir DIR]
 
 Lee el manifiesto de la corrida (configuración efectiva, topología, método), verifica que los datos y el
 código son los registrados, se conecta al broker con sus credenciales y ejecuta el rol que le toca.
 Sustituye a los `run_*.sh` de los proyectos base, que editaban `config.py` con `sed -i` (P2-H5).
 
+Perfil de seguridad (E10) = `security_profile` del manifiesto: S0 AMQP en claro; S1 AMQPS (verifica el broker
+con `<security-dir>/ca.pem`); S2 = S1 + canal E2E (`messaging/security/channel.py`) con la identidad
+`<security-dir>/<nodo>.key` y el almacén `<security-dir>/trust.json`. `security-dir` = `<run-dir>/security`.
+
 Códigos de salida: 0 bien · 2 registro fallido · 3 ronda sin actualizaciones · 4 sin noticias del servidor ·
-5 error de configuración.
+5 error de configuración · 6 broker perdido o inalcanzable (ADR-12) · 7 error de transporte no recuperable.
+Los eventos (inicio, pérdida y recuperación del broker, salida) quedan en `nodes/<nodo>/events.jsonl`.
 """
 from __future__ import annotations
 
@@ -23,12 +28,16 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from broker.provision_broker import DEV_AMQP_PORT, NodeCredentials  # noqa: E402
+from aio_pika.exceptions import AMQPConnectionError  # noqa: E402
+
+from broker.provision_broker import DEV_AMQP_PORT, DEV_AMQPS_PORT, NodeCredentials  # noqa: E402
 from core.config import PROJECT_ROOT  # noqa: E402
 from experiments.manifest import load_manifest, verify_inputs  # noqa: E402
 from messaging.contracts import ContractValidator  # noqa: E402
 from messaging.frame import Limits  # noqa: E402
-from messaging.transport_amqp import AmqpTransport  # noqa: E402
+from messaging.security import uses_e2e, uses_tls  # noqa: E402
+from messaging.transport_amqp import AmqpTransport, BrokerLostError, TransportError, tls_context  # noqa: E402
+from telemetry.events import EventLog, events_path  # noqa: E402
 from telemetry.kpi_log import KpiLogger, kpi_path  # noqa: E402
 from topologies.base import NodeContext  # noqa: E402
 
@@ -92,20 +101,60 @@ async def run(args: argparse.Namespace) -> int:
         log.error("Nodo desconocido: %s", args.node)
         return 5
     torch.manual_seed(int(cfg["data"]["seed"]))
+    profile = manifest.get("security_profile", "S0")
+    sec_dir = Path(args.security_dir) if args.security_dir else run_dir / "security"
+    events = EventLog(events_path(run_dir, args.node), args.node)
     creds = NodeCredentials(**json.loads((run_dir / "credentials.json").read_text(encoding="utf-8"))[args.node])
     limits = Limits.from_config(cfg["communication"])
-    transport = AmqpTransport(creds.amqp_url(args.amqp_host, args.amqp_port), args.node, creds.username,
-                              cfg["communication"]["broker"], limits.max_frame_bytes)
+    tls = uses_tls(profile)
+    port = args.amqp_port or (DEV_AMQPS_PORT if tls else DEV_AMQP_PORT)
+    sec_cfg = cfg["communication"].get("security", {})
+    # En S2 la trama cifrada ocupa algo más que la interna (cabecera externa + etiqueta GCM)
+    wire_limit = limits.max_frame_bytes + (2048 if uses_e2e(profile) else 0)
+    transport = AmqpTransport(creds.amqp_url(args.amqp_host, port, tls=tls), args.node, creds.username,
+                              cfg["communication"]["broker"], wire_limit,
+                              ssl_context=tls_context(str(sec_dir / "ca.pem")) if tls else None, on_event=events)
     kpi = KpiLogger(kpi_path(run_dir, args.node), topology=manifest["topology"],
                     experiment_id=manifest["experiment_id"], manifest_sha256=manifest["manifest_sha256"],
                     node_id=args.node)
     validator = ContractValidator(enabled=cfg["communication"].get("schema_validation", True))
     role = role_of(cfg, manifest["topology"], args.node)
-    async with transport:
-        ctx = NodeContext(cfg, manifest, run_dir, args.node, transport, validator, limits, kpi)
-        log.info("[%s] rol %s · %s · %s · %s", args.node, role, manifest["topology"], manifest["method"],
-                 manifest["experiment_id"])
-        return await run_role(ctx, role, Path(args.processed))
+    signer = None
+    if uses_e2e(profile):
+        from messaging.security.channel import SecureTransport
+        from messaging.security.identity import TRUST_FILE, Identity, TrustStore
+        from messaging.security.telemetry_sig import TelemetrySigner
+        trust = TrustStore.load(sec_dir / TRUST_FILE)
+        identity = Identity.load(args.node, sec_dir / f"{args.node}.key", trust)
+        transport = SecureTransport(transport, identity, trust, experiment_id=manifest["experiment_id"],
+                                    topology=manifest["topology"], validator=validator, limits=limits,
+                                    handshake_timeout_s=float(sec_cfg.get("handshake_timeout_s", 60)),
+                                    replay_window=int(sec_cfg.get("replay_window", 64)))
+        signer = TelemetrySigner(identity, trust)
+    events("node_start", {"role": role, "profile": profile, "topology": manifest["topology"]})
+    try:
+        await transport.connect()
+    except (AMQPConnectionError, ConnectionError, OSError) as exc:
+        events("broker_unreachable", {"error": f"{type(exc).__name__}: {exc}"})
+        log.error("[%s] broker inalcanzable: %s", args.node, exc)
+        return 6
+    code: int
+    try:
+        ctx = NodeContext(cfg, manifest, run_dir, args.node, transport, validator, limits, kpi, security=signer)
+        log.info("[%s] rol %s · %s · %s · %s · %s", args.node, role, manifest["topology"], manifest["method"],
+                 profile, manifest["experiment_id"])
+        code = await run_role(ctx, role, Path(args.processed))
+    except BrokerLostError as exc:
+        log.error("[%s] fin por pérdida del broker: %s", args.node, exc)
+        code = 6
+    except TransportError as exc:
+        log.error("[%s] error de transporte: %s", args.node, exc)
+        events("transport_error", {"error": str(exc)})
+        code = 7
+    finally:
+        await transport.close()
+    events("node_exit", {"code": code})
+    return code
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -114,7 +163,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--node", required=True)
     ap.add_argument("--processed", default=str(PROJECT_ROOT / "data" / "processed"))
     ap.add_argument("--amqp-host", default="127.0.0.1")
-    ap.add_argument("--amqp-port", type=int, default=DEV_AMQP_PORT)
+    ap.add_argument("--amqp-port", type=int, default=None,
+                    help=f"por defecto {DEV_AMQP_PORT} (S0) o {DEV_AMQPS_PORT} (S1/S2): broker de docker/compose.yaml")
+    ap.add_argument("--security-dir", default=None, help="CA del broker e identidades (por defecto <run-dir>/security)")
     ap.add_argument("--threads", type=int, default=None, help="hilos de PyTorch (varios nodos en un mismo PC)")
     ap.add_argument("--skip-code-check", action="store_true", help="no comprobar el hash del código (desarrollo)")
     args = ap.parse_args(argv)
