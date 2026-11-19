@@ -1,0 +1,28 @@
+[project]
+name = "fl-multitopology-benchmark"
+version = "0.1.0"
+description = "Réplica y ampliación del benchmark FL multitopología (Castro-Rodriguez et al., ICI2ST 2026) sobre RabbitMQ"
+requires-python = ">=3.10"
+# Mínimos heredados de los proyectos base. Las versiones exactas se fijan tras
+# registrar el entorno de las Pi (docs/reproducibility.md §1.3).
+dependencies = [
+    "torch>=2.0",
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scikit-learn>=1.3",
+    "joblib>=1.3",
+    "pyyaml>=6.0",
+    "jsonschema>=4.18",
+    "aio-pika>=9.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+bench = ["websockets>=11"]          # solo scripts/bench_transport.py (comparación con el transporte de D0)
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["broker: requiere el broker RabbitMQ de docker/compose.yaml"]

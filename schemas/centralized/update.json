@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://fl-benchmark.local/schemas/centralized/update.json",
+  "title": "Actualización local",
+  "description": "Nodo que entrena → su agregador (servidor, agregador de clúster o agregador SD). Modelo local (payload pickle) con n_k y τ_k para FedAvg/FedNova (D0 Eq. 1, 3). `sub_round`: ronda interna (SD).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "msg_type",
+    "experiment_id",
+    "topology",
+    "sender_id",
+    "recipient_id",
+    "seq",
+    "round",
+    "n_samples",
+    "tau",
+    "metrics",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "../common/definitions.json#/definitions/schema_version"
+    },
+    "msg_type": {
+      "const": "UPDATE"
+    },
+    "experiment_id": {
+      "$ref": "../common/definitions.json#/definitions/experiment_id"
+    },
+    "topology": {
+      "$ref": "../common/definitions.json#/definitions/topology"
+    },
+    "sender_id": {
+      "$ref": "../common/definitions.json#/definitions/node_id"
+    },
+    "recipient_id": {
+      "$ref": "../common/definitions.json#/definitions/recipient_id"
+    },
+    "seq": {
+      "$ref": "../common/definitions.json#/definitions/seq"
+    },
+    "round": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "n_samples": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "tau": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "metrics": {
+      "$ref": "../common/definitions.json#/definitions/local_metrics"
+    },
+    "payload": {
+      "$ref": "../common/definitions.json#/definitions/payload_descriptor"
+    },
+    "sub_round": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000
+    }
+  }
+}

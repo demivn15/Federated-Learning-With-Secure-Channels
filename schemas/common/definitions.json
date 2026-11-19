@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://fl-benchmark.local/schemas/common/definitions.json",
+  "title": "Definiciones comunes de los contratos de mensajes",
+  "description": "Tipos reutilizados por todos los mensajes. Generaliza los esquemas de D4 (request/response) a N nodos, roles y topologías.",
+  "definitions": {
+    "schema_version": { "const": 1 },
+    "experiment_id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$" },
+    "node_id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,32}$" },
+    "recipient_id": {
+      "description": "Nodo destinatario o '*' para difusión",
+      "type": "string", "pattern": "^([A-Za-z0-9_.-]{1,32}|\\*)$"
+    },
+    "topology": { "enum": ["centralized", "hierarchical", "semi_decentralized", "p2p"] },
+    "seq": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "round": { "type": "integer", "minimum": 0, "maximum": 100000 },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "short_text": { "type": "string", "maxLength": 256 },
+    "method": { "enum": ["fedavg", "fedprox", "fednova"] },
+    "unit_interval": { "type": "number", "minimum": 0, "maximum": 1 },
+    "non_negative": { "type": "number", "minimum": 0 },
+    "tensor_spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "shape", "dtype"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[A-Za-z0-9_.]{1,64}$" },
+        "shape": { "type": "array", "minItems": 1, "maxItems": 4,
+                   "items": { "type": "integer", "minimum": 1, "maximum": 100000 } },
+        "dtype": { "enum": ["float32"] }
+      }
+    },
+    "payload_descriptor": {
+      "description": "Describe el payload pickle que sigue a la cabecera. Se valida ANTES de deserializar (04 ADR-04).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "protocol", "nbytes", "sha256", "tensors"],
+      "properties": {
+        "format": { "const": "pickle" },
+        "protocol": { "const": 4 },
+        "nbytes": { "type": "integer", "minimum": 1, "maximum": 4194304 },
+        "sha256": { "$ref": "#/definitions/sha256" },
+        "tensors": { "type": "array", "minItems": 1, "maxItems": 64,
+                     "items": { "$ref": "#/definitions/tensor_spec" } }
+      }
+    },
+    "local_metrics": {
+      "description": "Métricas del entrenamiento local (amplía el response_schema de D4).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["train_loss", "train_time_s"],
+      "properties": {
+        "train_loss": { "$ref": "#/definitions/non_negative" },
+        "train_time_s": { "$ref": "#/definitions/non_negative" },
+        "accuracy": { "$ref": "#/definitions/unit_interval" },
+        "precision": { "$ref": "#/definitions/unit_interval" },
+        "recall": { "$ref": "#/definitions/unit_interval" },
+        "f1": { "$ref": "#/definitions/unit_interval" }
+      }
+    },
+    "training_params": {
+      "description": "Hiperparámetros de la ronda (equivale a 'hyperparameters' del request_schema de D4).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "local_epochs", "mu"],
+      "properties": {
+        "method": { "$ref": "#/definitions/method" },
+        "local_epochs": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "mu": { "type": "number", "minimum": 0, "maximum": 10 }
+      }
+    }
+  }
+}

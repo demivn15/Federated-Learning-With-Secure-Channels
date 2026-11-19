@@ -1,0 +1,15 @@
+# Entorno local
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Datos y resultados (se regeneran con scripts/prepare_data.py y experiments/; RNF-10)
+data/
+results/
+
+# Secretos e inventario real (RNF-10)
+identities/
+broker_credentials/
+inventory.yaml
+docker/.env

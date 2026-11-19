@@ -1,0 +1,307 @@
+# =============================================================================
+#  Configuración de referencia D0 — réplica del paper base
+#  Castro-Rodriguez et al., "Comparative Study of Federated Learning
+#  Architectures on Resource-Constrained Edge Devices", ICI2ST 2026 (Eng. Proc.)
+#
+#  Etapa E0 (analisis_arquitectonico/06_implementation_roadmap.md).
+#  Cada valor indica su FUENTE:
+#    [D0 §x]   paper (fuente primaria)
+#    [COD]     código local P1/P2/P3 (analisis_arquitectonico/01 §8.2)
+#    [USR]     decisión del usuario (analisis_arquitectonico/03 §1)
+#    [SUP]     supuesto declarado: confirmar con los autores antes de publicar
+#    [REC]     decisión de diseño de la propuesta (analisis_arquitectonico/04)
+#  Ningún valor se elige sin fuente.
+# =============================================================================
+
+reference_id: d0_reference
+schema_version: 1
+
+# -----------------------------------------------------------------------------
+# Plataforma
+# -----------------------------------------------------------------------------
+platform:
+  devices: 6                                  # [D0 §3.3]
+  device_model: "Raspberry Pi 4 Model B 4GB"  # [D0 §3.3]
+  cpu: "Cortex-A72 @ 1.5 GHz"                 # [D0 §3.3]
+  python: "3.10"                              # [D0 §3.3]; los logs de P2 muestran 3.13 en las Pi (I-28) -> instalar 3.10
+  deployment: "5 client nodes + 1 infrastructure node"   # [D0 §3.3, Tabla 2]
+  node_assignment:                            # [D0 Tabla 1: "Each hospital maps one-to-one onto a dedicated Client Node"]
+    CN1: {pi: 1, hospital: H1}
+    CN2: {pi: 2, hospital: H2}
+    CN3: {pi: 3, hospital: H3}
+    CN4: {pi: 4, hospital: H4}
+    CN5: {pi: 5, hospital: H5}
+    infra: {pi: 6, hosts: [rabbitmq, "rol de la topología (servidor | raíz | coordinador | ninguno)"]}  # [USR Q-13]
+
+# -----------------------------------------------------------------------------
+# Datos
+# -----------------------------------------------------------------------------
+data:
+  task: "binary classification: is_premature_ncd"   # [D0 §3.1]
+  label_column: is_premature_ncd                      # [COD]
+  drop_columns: [hospital_cliente, ncd_group]         # [COD] ncd_group deriva de la causa de muerte (fuga de la etiqueta)
+  features:                                           # [COD P1 prepare_environment.py] 16 + 3 = 19 variables = [D0 §3.1]
+    categorical: [sexo, etnia, sabe_leer, est_civil, niv_inst, prov_res, prov_fall, cant_fall,
+                  area_res, area_fall, lugar_ocur, mor_viol, lug_viol, autopsia, residente, mes_fall]
+    numeric: [edad_anos, anio_fall, dia_fall]
+  partition: d0_table1                                # [D0 Tabla 1]
+  # Reconstrucción a partir de los silos de P2 (FL_Hierarchical_Hospital/data/silos).
+  # Verificado en analisis_arquitectonico/01 §0.4: silo_4 + silo_6 = Hospital 4.
+  hospitals:
+    H1: {source_files: [silo_1.csv],             rows: 7739,  positives_d0: 5657, positives_local: 5656}
+    H2: {source_files: [silo_2.csv],             rows: 19642, positives_d0: 39,   positives_local: 30}
+    H3: {source_files: [silo_3.csv],             rows: 279,   positives_d0: 167,  positives_local: 167}
+    H4: {source_files: [silo_4.csv, silo_6.csv], rows: 1191,  positives_d0: 1185, positives_local: 1185}
+    H5: {source_files: [silo_5.csv],             rows: 10232, positives_d0: 143,  positives_local: 146}
+  total_rows: 39083                                   # [D0 Tabla 1] = [VER] local
+  # Diferencia conocida de positivos (local 7184 vs D0 7191). Se reporta; no se corrige (I-02).
+  known_label_discrepancy: true
+  preprocessing:                                      # [D0 §3.1]; el código usa StandardScaler (I-21) -> NO es la referencia
+    numeric:     {impute: median,        scale: robust}
+    categorical: {impute: most_frequent, encode: one_hot}
+    fit_on: "centralized training set only; reused unchanged in all experiments"   # [D0 §3.1]
+    fit_on_local: union_of_hospital_train_splits     # [SUP] la cohorte nacional (87 716) no está en el repo; sustituto más cercano sin usar validación ni test
+    # E1 (2026-11-12): con la partición de D0 el one-hot produce 278 columnas (prov_fall: 24 categorías,
+    # cant_fall: 158), frente a las 105 del código local, cuyo preprocesador se ajustó con data/raw de P1
+    # (solo 3 provincias y 3 cantones de fallecimiento). 278 es coherente con D0, que ajustó con la cohorte
+    # nacional (≥ esas categorías). MLP 256/128/64 con 278 entradas = 112 641 parámetros ≈ 450 KB en float32.
+    expected_n_features: 278                          # [VER] scripts/prepare_data.py; antes 105 [COD], descartado
+  split:                                              # [D0 §3.7] + [SUP Q-15]
+    train: 0.60
+    validation: 0.20
+    test: 0.20
+    stratified: true
+    scope: per_hospital                               # [SUP Q-15]
+    common_holdout: "union of the 5 per-hospital test splits"   # [SUP Q-15]
+    threshold_selection: "maximize F1 on union of validation splits"  # [D0 §3.7] + [SUP Q-15]
+  seed: 42                                            # [COD]
+
+# -----------------------------------------------------------------------------
+# Modelo y entrenamiento local
+# -----------------------------------------------------------------------------
+model:
+  type: mlp
+  hidden_layers: [256, 128, 64]          # [D0 §3.3]; el código local usa 120/84 (I-01)
+  activation: relu                       # [D0 §3.3]
+  dropout: 0.3                           # [D0 §3.3]
+  output: single_logit                   # [D0 §3.3]
+  parameter_names: canonical             # fc1, fc2, fc3, fc4  [REC RNF-14]
+
+training:
+  local_epochs: 3                        # [COD] (D0 no lo informa)
+  optimizer: adam                        # [COD]
+  learning_rate: 0.01                    # [COD]
+  optimizer_state: persistent_per_node   # [COD P1/P3] + [SUP Q-16]
+  batch_size: 16                         # [COD]
+  loss: bce_with_logits                  # [COD]
+  pos_weight: null                       # [COD] sin ponderación de clases
+
+# -----------------------------------------------------------------------------
+# Agregación
+# -----------------------------------------------------------------------------
+aggregation:
+  methods: [fedavg, fedprox, fednova]    # [D0 §3.5]
+  fedavg: {weighting: n_samples}         # [D0 Eq. 1]; el código promedia sin ponderar (I-20)
+  fedprox: {mu: 0.01, server_rule: fedavg_weighted}   # [D0 Eq. 2]
+  fednova: {formula: d0_eq3}             # [D0 Eq. 3] tau_bar = sum(n_k/N * tau_k); la FedNova del código es incorrecta (I-07)
+  robust: none                           # [REC RF-29] desactivada en la reproducción
+
+# -----------------------------------------------------------------------------
+# Topologías (las 3 del paper; P2P es una ampliación y no forma parte de D0)
+# -----------------------------------------------------------------------------
+topologies:
+  centralized:                           # [D0 §3.3.2]
+    server: infra
+    clients: [CN1, CN2, CN3, CN4, CN5]
+    sync: barrier
+    rounds: {policy: fixed, value: 12}   # [D0 Tabla 2] + [SUP Q-16 / I-29]
+    min_clients: 5                       # [D0 §3.3.2] barrera con los 5 Client Nodes
+    register_timeout_s: 120              # [REC RNF-06] espera máxima de registros
+    round_timeout_s: 900                 # [REC RNF-06] T_round: el servidor agrega con lo recibido al vencer
+    client_round_wait_s: 1800            # [REC] el cliente aborta si no llega la ronda siguiente
+
+  hierarchical:                          # [D0 §3.3.4]
+    root: infra
+    clusters:
+      A: {aggregator: CN1, members: [CN1, CN2, CN3]}
+      B: {aggregator: CN4, members: [CN4, CN5]}
+    cluster_aggregators_train: true      # [D0 §3.3.4] "dual role"
+    redistribution: via_cluster_aggregators   # [SUP] D0 no lo especifica (01 §1.15.7); alternativa: direct
+    rounds: {policy: fixed, value: 30}   # [D0 Tabla 2] + [SUP Q-16]
+    min_clients: 5                       # [D0 §3.3.4] los 5 Client Nodes
+    register_timeout_s: 120              # [REC RNF-06]
+    cluster_round_timeout_s: 600         # [REC RNF-06] el agregador de clúster agrega con lo recibido al vencer
+    round_timeout_s: 900                 # [REC RNF-06] raíz; > cluster_round_timeout_s (una hoja caída no tumba al clúster)
+    client_round_wait_s: 1800            # [REC] hojas y agregadores abortan si no llega la ronda siguiente
+
+  semi_decentralized:                    # [D0 §3.3.3, §4.3]
+    coordinator: infra                   # pasivo: no entrena ni agrega
+    candidates: [CN1, CN2, CN3, CN4, CN5]
+    selector: lottery_d0                 # uniforme en [0,1), semilla compartida, 5 subintervalos
+    selector_seed: 42                    # [SUP] D0 no indica qué semilla se usó
+    aggregator_trains: false             # [D0 §4.3] "remaining four worker Client Nodes"
+    internal_rounds: 5                   # [D0 §3.3.3]
+    rounds:                              # [USR] 5–9 rondas globales; [SUP Q-16] patience
+      policy: early_stopping
+      metric: recall_local_validation
+      patience: 3                        # [COD P3]
+      min_improvement: 0.001             # [COD]
+      max_global_rounds: 50              # [COD P3]
+    safeguards:                          # [D0 §4.3] recomendadas por D0; [USR Q-09c] activas en la ampliación
+      enabled: false                     # reproducción fiel: D0 no tenía salvaguardas
+      max_consecutive_selections: 2      # [REC] D0 §4.3 no da valor
+      health_check: claim_response       # [REC] sin CLAIM en election_timeout_s ⇒ no candidato
+    sd_score:                            # [REC 02 §3.2, R-02] SD-score híbrido (D3 §2.1.3); pesos sin fuente en D3
+      weights: {lateness: 1.0, rtt: 0.5, cpu_idle: 0.2, ram_free: 0.1, temperature: 0.2}   # observadas > autodeclaradas
+    min_clients: 5                       # [D0 §3.3.3]
+    register_timeout_s: 120              # [REC RNF-06]
+    election_timeout_s: 30               # [REC] espera de CLAIM (también health check)
+    internal_round_timeout_s: 900        # [REC ADR-12] agregador: desde el inicio de la ronda interna (P3: 60 s)
+    arrival_window_s: 300                # [REC ADR-12] agregador: desde la 1.ª llegada
+    outer_round_timeout_s: 3600          # [REC] T_outer: el coordinador espera AGG_COMPLETE
+    client_round_wait_s: 3600            # [REC] un CN aborta sin noticias del coordinador o del agregador
+
+  p2p:                                   # AMPLIACIÓN (D5; 04 ADR-06): no forma parte de D0
+    peers: [CN1, CN2, CN3, CN4, CN5]     # la 6.ª Pi solo aloja el broker (sin rol FL)
+    graph: full_mesh                     # [REC] full_mesh | ring | random_k (estudio de grafos, ADR-10)
+    k: 3                                 # [REC] grado mínimo de random_k
+    graph_seed: 42                       # [REC]
+    weight_by_samples: true              # [REC ADR-06] Metropolis × n_j ⇒ malla completa ≡ FedAvg ponderado (Eq. 1)
+    rounds:                              # [USR Q-16] patience 3 sobre el recall del modelo MEZCLADO (D5 §3.4)
+      policy: early_stopping
+      metric: recall_mixed_local_validation
+      patience: 3
+      min_improvement: 0.001
+      max_global_rounds: 50
+    hello_timeout_s: 120                 # [REC] arranque
+    round_timeout_s: 900                 # [REC RNF-06] T_round: mezcla con lo recibido al vencer
+    dead_after_rounds: 3                 # [D5 §5.2] 1 ronda sin MODEL ⇒ SUSPECT; 3 ⇒ DEAD
+    buffer_rounds: 2                     # [D5 §5.2] s: modelos adelantados aceptados; atraso > s ⇒ SYNC
+    sync_timeout_s: 60                   # [REC]
+    client_round_wait_s: 3600            # [REC] aislado: espera máxima de tráfico de algún vecino
+    min_peers: 1                         # [USR Q-09c] sin modelos de vecinos la ronda no cuenta
+
+# -----------------------------------------------------------------------------
+# Comunicación
+# -----------------------------------------------------------------------------
+communication:
+  transport: rabbitmq                    # [USR Q-04]; D0 usaba WebSocket -> diferencia medida en E3 (RF-32)
+  broker_host: infra                     # [USR Q-13]
+  broker:                                # [REC 04 ADR-03 §4.5]; valores a recalibrar en la 6.ª Pi (E11)
+    image: "rabbitmq:3.13.7-management"  # D3 propone 3.12 (fuera de soporte); versión de la Pi pendiente de verificar
+    vhost_prefix: "fl-"                  # un vhost por experimento
+    unicast_exchange: fl.unicast         # direct, clave = node_id destino
+    broadcast_exchange: fl.broadcast     # fanout, solo control pequeño
+    queue:
+      durable: true                      # cola sobrevive al reinicio del nodo; los MENSAJES no son persistentes
+      max_length: 64                     # 64 × 453 KB ≈ 29 MB por cola en el peor caso
+      overflow: reject-publish           # el emisor recibe nack (sin descartes silenciosos)
+      message_ttl_ms: 600000             # 10 min; en P2P se ajusta a la ventana de obsolescencia
+    message_persistent: false            # sin escrituras en la tarjeta SD (RNF-16)
+    prefetch: 8
+    heartbeat_s: 30
+    publish_timeout_s: 30
+    validated_user_id: true              # el broker comprueba user_id = usuario de la conexión (verificado en E3)
+  control_format: json                   # [USR Q-03] formato del proyecto base (P1/P3)
+  parameter_format: pickle               # [USR Q-03] + [D0 §3.4]; justificación en 04 ADR-04
+  pickle_protocol: 4                     # [COD] P1/P3 llaman a pickle.dumps() sin protocolo = DEFAULT_PROTOCOL (4 en Python 3.8+); se fija explícito para que M sea estable
+  unpickler: restricted                  # [REC ADR-04] no cambia los bytes en la red
+  # E2: pickle de dict[nombre→Tensor] (MLP 256/128/64, 278 entradas) = 453 090 B (450 564 B en float32 crudo)
+  limits:                                # [REC RF-18] se comprueban ANTES de deserializar
+    max_frame_bytes: 4194304             # 4 MiB ≈ 9× el modelo de referencia
+    max_header_bytes: 65536
+    max_payload_bytes: 4194304
+  schema_validation: true                # [RF-16] false solo para medir su coste (RF-30)
+  security_profile: S0                   # [REC] reproducción sin seguridad (D0 no tenía); S1/S2 en otros estudios
+  message_pattern: unicast               # [REC 04 §4.5]
+
+# -----------------------------------------------------------------------------
+# Evaluación
+# -----------------------------------------------------------------------------
+evaluation:
+  mode: offline_from_checkpoints         # [REC ADR-07]
+  metrics: [accuracy, precision, recall, f1]   # [D0 §3.7]
+  average: macro                         # [COD] P1/P2/P3 usan average='macro'; coherente con D0 Tabla 5 (recall 0,5000 y precisión = accuracy/2 en nodos que predicen una sola clase)
+  threshold_objective: macro_f1          # [D0 §3.7] "threshold maximizes F1" con la misma definición de F1
+  summary: mean_last_5_rounds            # [D0 §3.7]
+  scopes:
+    network: true                        # mismo alcance en todas las topologías [REC, I-23]
+    aggregator_node_sd: true             # D0 Tabla 7 † (solo SD)
+    legacy_local_pre_aggregation: true   # métrica del código (D1 H1), para explicar diferencias
+    per_client: true                     # D0 Tablas 5 y 6
+    recall_variance_across_clients: true # D0 Fig. 4
+  centralized_reference:                 # [D0 §3.3.1]
+    cohort: national
+    rows: 87716
+    split: [0.60, 0.20, 0.20]
+    stratified: true
+
+# -----------------------------------------------------------------------------
+# KPIs de sistema
+# -----------------------------------------------------------------------------
+kpis:
+  clock: monotonic_local                 # [REC RNF-07]
+  hardware: [cpu_percent, ram_mb, temperature_c, cpu_freq_mhz]   # [D0 Tabla 8]
+  hardware_scope: training_client_nodes  # [D0 Tabla 8] "training Client Nodes, last 5 rounds"
+  straggler: {measured_at: aggregator, definition: "last_arrival - first_arrival per round"}  # [REC ADR-11]
+  communication:
+    payload_bytes_per_node: true         # vista comparable con D0 "Comm. per Round"
+    nic_bytes_per_node: true             # incluye el salto del broker
+    broker_stats: true                   # memoria, colas, rechazos de la 6.ª Pi
+  thermal_guard: off                     # [REC RNF-13] sin ajuste automático de hiperparámetros
+  # E4: el código base mide la CPU con psutil.cpu_percent(interval=0.2) (CPU de TODO el sistema durante
+  # 0,2 s) ANTES de recibir el modelo y DESPUÉS de evaluar: nunca durante el entrenamiento. Por eso D0
+  # reporta ≈ 1–5 %. Se registran ambas: la heredada (para la Tabla 8) y la del proceso en la ronda.
+  cpu:
+    legacy_interval_s: 0.2               # [COD] metrics_utils.get_cpu_percent
+    process_during_round: true           # [REC] tiempo de CPU del proceso / tiempo de pared de la ronda
+  ram: process_rss_mb                    # [COD] metrics_utils.get_ram_mb
+
+# -----------------------------------------------------------------------------
+# Energía (analítica, sin medición directa) [USR Q-07]
+# -----------------------------------------------------------------------------
+energy:
+  measured: false
+  e_comp:                                # [D0 Eq. 4]
+    alpha: 2.0e-28
+    c_cycles_per_bit: 20
+    D_bits: "n_samples * n_features * 32"   # [COD]
+    f_hz: measured_cpu_freq                 # [COD]; nominal 1.5e9 [D0]
+  e_comm:
+    p_watts: 0.5                         # [D0 §3.6]
+    variant_primary: measured_tcomm      # [SUP Q-14] p * T_comm medido (como el código)
+    # E4–E5: el código base usa DOS T_comm. El servidor suma E_alpha (E_cum) con p·recv_time = DESCARGA
+    # del modelo global (cabecera y modelo se envían seguidos); el CSV del cliente usa p·send_time = SUBIDA.
+    # Con AMQP la descarga no es observable por separado ⇒ se aproxima con la publicación servidor→broker.
+    tcomm_sources:
+      legacy_download: "servidor: publicación del modelo global hacia cada cliente hasta la confirmación (≈ descarga de P1)"
+      transfer: "cliente: publicación del modelo local hasta la confirmación del broker (≈ send_time de P1)"
+    variant_eq5:                         # [D0 Eq. 5]; no se reporta hasta confirmar los valores
+      enabled: true
+      reported: false
+      bandwidth_B: null                  # sin valor confirmado
+      channel_gain_h: null               # sin valor confirmado
+      noise_sigma2: null                 # sin valor confirmado
+  e_cum: "sum over completed rounds of client-node e_comp + e_comm"   # [D0 §3.6]
+
+# -----------------------------------------------------------------------------
+# Repeticiones
+# -----------------------------------------------------------------------------
+checkpoints:
+  local: false                           # [REC] modelos locales tras entrenar (solo para verificación; ocupan disco)
+
+runs:
+  reproduction_seeds: [42]               # D0 = una ejecución
+  extended_seeds: [42, 43, 44, 45, 46]   # [D3 §9] n >= 5 para los IC
+
+# -----------------------------------------------------------------------------
+# Variantes heredadas del código local (NO son la referencia; solo para explicar diferencias)
+# -----------------------------------------------------------------------------
+legacy_variants:
+  model_120_84:            {model: {hidden_layers: [120, 84]}}
+  fedavg_uniform:          {aggregation: {fedavg: {weighting: uniform}}}
+  fednova_code:            {aggregation: {fednova: {formula: code_equivalent_weighted_fedavg}}}
+  lottery_randint:         {topologies: {semi_decentralized: {selector: lottery_legacy}}}
+  hierarchical_flat:       {topologies: {hierarchical: {clusters: flat}}}
+  standard_scaler:         {data: {preprocessing: {numeric: {scale: standard}}}}
+  split_80_20_threshold05: {data: {split: legacy_80_20}, evaluation: {threshold: 0.5}}

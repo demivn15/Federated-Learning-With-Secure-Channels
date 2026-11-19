@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://fl-benchmark.local/schemas/p2p/sync_resp.json",
+  "title": "Respuesta de sincronización",
+  "description": "Vecino → par atrasado. Su último modelo mezclado y la ronda en que lo obtuvo.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "msg_type",
+    "experiment_id",
+    "topology",
+    "sender_id",
+    "recipient_id",
+    "seq",
+    "round",
+    "n_samples",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "../common/definitions.json#/definitions/schema_version"
+    },
+    "msg_type": {
+      "const": "SYNC_RESP"
+    },
+    "experiment_id": {
+      "$ref": "../common/definitions.json#/definitions/experiment_id"
+    },
+    "topology": {
+      "$ref": "../common/definitions.json#/definitions/topology"
+    },
+    "sender_id": {
+      "$ref": "../common/definitions.json#/definitions/node_id"
+    },
+    "recipient_id": {
+      "$ref": "../common/definitions.json#/definitions/recipient_id"
+    },
+    "seq": {
+      "$ref": "../common/definitions.json#/definitions/seq"
+    },
+    "round": {
+      "$ref": "../common/definitions.json#/definitions/round"
+    },
+    "n_samples": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "payload": {
+      "$ref": "../common/definitions.json#/definitions/payload_descriptor"
+    }
+  }
+}

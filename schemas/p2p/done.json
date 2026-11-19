@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://fl-benchmark.local/schemas/p2p/done.json",
+  "title": "Fin de un par",
+  "description": "Par → vecinos. Su parada local se cumplió (o todos sus vecinos terminaron) en la ronda `round` (D5 §3.4).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "msg_type",
+    "experiment_id",
+    "topology",
+    "sender_id",
+    "recipient_id",
+    "seq",
+    "round",
+    "reason"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "../common/definitions.json#/definitions/schema_version"
+    },
+    "msg_type": {
+      "const": "DONE"
+    },
+    "experiment_id": {
+      "$ref": "../common/definitions.json#/definitions/experiment_id"
+    },
+    "topology": {
+      "$ref": "../common/definitions.json#/definitions/topology"
+    },
+    "sender_id": {
+      "$ref": "../common/definitions.json#/definitions/node_id"
+    },
+    "recipient_id": {
+      "$ref": "../common/definitions.json#/definitions/recipient_id"
+    },
+    "seq": {
+      "$ref": "../common/definitions.json#/definitions/seq"
+    },
+    "round": {
+      "$ref": "../common/definitions.json#/definitions/round"
+    },
+    "reason": {
+      "$ref": "../common/definitions.json#/definitions/short_text"
+    }
+  }
+}

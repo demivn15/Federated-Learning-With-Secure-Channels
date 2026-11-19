@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://fl-benchmark.local/schemas/p2p/sync_req.json",
+  "title": "Petición de sincronización",
+  "description": "Par atrasado → vecinos (D5 §5.2). `round`: última ronda que completó.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "msg_type",
+    "experiment_id",
+    "topology",
+    "sender_id",
+    "recipient_id",
+    "seq",
+    "round"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "../common/definitions.json#/definitions/schema_version"
+    },
+    "msg_type": {
+      "const": "SYNC_REQ"
+    },
+    "experiment_id": {
+      "$ref": "../common/definitions.json#/definitions/experiment_id"
+    },
+    "topology": {
+      "$ref": "../common/definitions.json#/definitions/topology"
+    },
+    "sender_id": {
+      "$ref": "../common/definitions.json#/definitions/node_id"
+    },
+    "recipient_id": {
+      "$ref": "../common/definitions.json#/definitions/recipient_id"
+    },
+    "seq": {
+      "$ref": "../common/definitions.json#/definitions/seq"
+    },
+    "round": {
+      "$ref": "../common/definitions.json#/definitions/round"
+    }
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://fl-benchmark.local/schemas/p2p/hello.json",
+  "title": "Saludo de un par",
+  "description": "Par → vecino, al arrancar (D5 §5.2). Anuncia la arquitectura (rechazo temprano) y n.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "msg_type",
+    "experiment_id",
+    "topology",
+    "sender_id",
+    "recipient_id",
+    "seq",
+    "round",
+    "n_samples",
+    "arch_hash"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "../common/definitions.json#/definitions/schema_version"
+    },
+    "msg_type": {
+      "const": "HELLO"
+    },
+    "experiment_id": {
+      "$ref": "../common/definitions.json#/definitions/experiment_id"
+    },
+    "topology": {
+      "$ref": "../common/definitions.json#/definitions/topology"
+    },
+    "sender_id": {
+      "$ref": "../common/definitions.json#/definitions/node_id"
+    },
+    "recipient_id": {
+      "$ref": "../common/definitions.json#/definitions/recipient_id"
+    },
+    "seq": {
+      "$ref": "../common/definitions.json#/definitions/seq"
+    },
+    "round": {
+      "$ref": "../common/definitions.json#/definitions/round"
+    },
+    "n_samples": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "arch_hash": {
+      "$ref": "../common/definitions.json#/definitions/sha256"
+    }
+  }
+}

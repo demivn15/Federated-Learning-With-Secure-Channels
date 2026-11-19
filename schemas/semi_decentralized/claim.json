@@ -1,0 +1,91 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://fl-benchmark.local/schemas/semi_decentralized/claim.json",
+  "title": "Ganador calculado por un Client Node",
+  "description": "Client Node → coordinador. Ganador que el nodo calculó (el coordinador verifica que todos coinciden, I-26) y telemetría AUTODECLARADA para `SD-score` (se firma en el perfil S2, E10).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "msg_type",
+    "experiment_id",
+    "topology",
+    "sender_id",
+    "recipient_id",
+    "seq",
+    "round",
+    "attempt",
+    "winner",
+    "telemetry"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "../common/definitions.json#/definitions/schema_version"
+    },
+    "msg_type": {
+      "const": "CLAIM"
+    },
+    "experiment_id": {
+      "$ref": "../common/definitions.json#/definitions/experiment_id"
+    },
+    "topology": {
+      "$ref": "../common/definitions.json#/definitions/topology"
+    },
+    "sender_id": {
+      "$ref": "../common/definitions.json#/definitions/node_id"
+    },
+    "recipient_id": {
+      "$ref": "../common/definitions.json#/definitions/recipient_id"
+    },
+    "seq": {
+      "$ref": "../common/definitions.json#/definitions/seq"
+    },
+    "round": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64
+    },
+    "winner": {
+      "$ref": "../common/definitions.json#/definitions/node_id"
+    },
+    "telemetry_sig": {
+      "description": "Perfil S2: firma ECDSA P-256 (r‖s, hex) del nodo sobre experimento, emisor, ronda, intento y telemetría (messaging/security/telemetry_sig.py).",
+      "type": "string",
+      "pattern": "^[0-9a-f]{128}$"
+    },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cpu_percent",
+        "ram_available_mb",
+        "temperature_c"
+      ],
+      "properties": {
+        "cpu_percent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "ram_available_mb": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1048576
+        },
+        "temperature_c": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": -40,
+          "maximum": 150
+        }
+      }
+    }
+  }
+}

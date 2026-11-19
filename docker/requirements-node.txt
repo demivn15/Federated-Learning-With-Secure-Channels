@@ -1,0 +1,16 @@
+# Dependencias de la imagen de los nodos (docker/node.Dockerfile). Versiones = venv del PC de desarrollo
+# (2026-11-19), para que una corrida en contenedores sea comparable con una corrida en procesos locales y
+# para cargar el preprocesador joblib con el mismo scikit-learn. Las de la Pi (Python 3.10, aarch64) se
+# fijan en E11 (docs/reproducibility.md §1.2).
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.15.0+cpu
+numpy==2.4.6
+pandas==3.1.1
+scikit-learn==1.9.1
+joblib==1.6.0
+PyYAML==6.0.3
+jsonschema==4.26.0
+aio-pika==10.2.3
+aiormq==7.2.5
+psutil==7.2.2
+cryptography==50.0.2

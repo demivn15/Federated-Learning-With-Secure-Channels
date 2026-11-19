@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://fl-benchmark.local/schemas/common/heartbeat.json",
+  "title": "Latido de membresía",
+  "description": "Señal periódica de vida (membresía P2P y SD; detección de fallos, RF-22).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "msg_type",
+    "experiment_id",
+    "topology",
+    "sender_id",
+    "recipient_id",
+    "seq",
+    "round"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "definitions.json#/definitions/schema_version"
+    },
+    "msg_type": {
+      "const": "HEARTBEAT"
+    },
+    "experiment_id": {
+      "$ref": "definitions.json#/definitions/experiment_id"
+    },
+    "topology": {
+      "$ref": "definitions.json#/definitions/topology"
+    },
+    "sender_id": {
+      "$ref": "definitions.json#/definitions/node_id"
+    },
+    "recipient_id": {
+      "$ref": "definitions.json#/definitions/recipient_id"
+    },
+    "seq": {
+      "$ref": "definitions.json#/definitions/seq"
+    },
+    "round": {
+      "$ref": "definitions.json#/definitions/round"
+    }
+  }
+}

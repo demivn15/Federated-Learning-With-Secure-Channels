@@ -1,0 +1,24 @@
+# Broker RabbitMQ para desarrollo local (E3). En el clúster corre en la 6.ª Pi (04 ADR-03).
+# Uso:  python scripts/broker_env.py   (genera docker/.env con credenciales aleatorias, una vez)
+#       docker compose -f docker/compose.yaml up -d
+# Los puertos se publican solo en 127.0.0.1, en 5673/15673 (no en los estándar 5672/15672) porque en el PC
+# de desarrollo ya existe un servicio RabbitMQ nativo de Windows que ocupa esos puertos.
+name: fl-benchmark
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.13.7-management
+    container_name: fl-rabbitmq
+    hostname: fl-rabbitmq
+    env_file: .env                      # RABBITMQ_DEFAULT_USER / RABBITMQ_DEFAULT_PASS (administrador)
+    ports:
+      - "127.0.0.1:5673:5672"           # AMQP
+      - "127.0.0.1:15673:15672"         # API de gestión (aprovisionamiento y métricas del broker)
+    volumes:
+      - ./rabbitmq.conf:/etc/rabbitmq/conf.d/90-fl-benchmark.conf:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 5s
+      timeout: 10s
+      retries: 24
+    mem_limit: 1g                       # aproxima el presupuesto que tendrá en la 6.ª Pi junto al rol

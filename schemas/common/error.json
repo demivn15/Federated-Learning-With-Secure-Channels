@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://fl-benchmark.local/schemas/common/error.json",
+  "title": "Error de protocolo",
+  "description": "Notifica el rechazo de un mensaje (no incluye datos del mensaje rechazado).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "msg_type",
+    "experiment_id",
+    "topology",
+    "sender_id",
+    "recipient_id",
+    "seq",
+    "code"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "definitions.json#/definitions/schema_version"
+    },
+    "msg_type": {
+      "const": "ERROR"
+    },
+    "experiment_id": {
+      "$ref": "definitions.json#/definitions/experiment_id"
+    },
+    "topology": {
+      "$ref": "definitions.json#/definitions/topology"
+    },
+    "sender_id": {
+      "$ref": "definitions.json#/definitions/node_id"
+    },
+    "recipient_id": {
+      "$ref": "definitions.json#/definitions/recipient_id"
+    },
+    "seq": {
+      "$ref": "definitions.json#/definitions/seq"
+    },
+    "code": {
+      "enum": [
+        "contract",
+        "size",
+        "payload",
+        "unexpected",
+        "internal"
+      ]
+    },
+    "detail": {
+      "$ref": "definitions.json#/definitions/short_text"
+    },
+    "ref_seq": {
+      "$ref": "definitions.json#/definitions/seq"
+    }
+  }
+}

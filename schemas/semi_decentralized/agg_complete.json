@@ -1,0 +1,97 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://fl-benchmark.local/schemas/semi_decentralized/agg_complete.json",
+  "title": "Fin de las rondas internas",
+  "description": "Agregador → coordinador. Sin modelo. `recall`: recall local medio de los trabajadores en la última ronda interna (métrica de parada de P3); `lateness`: retraso medio de llegada de cada trabajador (variable observada de `SD-score`).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "msg_type",
+    "experiment_id",
+    "topology",
+    "sender_id",
+    "recipient_id",
+    "seq",
+    "round",
+    "attempt",
+    "internal_rounds_done",
+    "recall",
+    "straggler_s",
+    "lateness",
+    "workers_missing"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "../common/definitions.json#/definitions/schema_version"
+    },
+    "msg_type": {
+      "const": "AGG_COMPLETE"
+    },
+    "experiment_id": {
+      "$ref": "../common/definitions.json#/definitions/experiment_id"
+    },
+    "topology": {
+      "$ref": "../common/definitions.json#/definitions/topology"
+    },
+    "sender_id": {
+      "$ref": "../common/definitions.json#/definitions/node_id"
+    },
+    "recipient_id": {
+      "$ref": "../common/definitions.json#/definitions/recipient_id"
+    },
+    "seq": {
+      "$ref": "../common/definitions.json#/definitions/seq"
+    },
+    "round": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64
+    },
+    "internal_rounds_done": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "recall": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1
+    },
+    "straggler_s": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "lateness": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "$ref": "../common/definitions.json#/definitions/node_id"
+      },
+      "additionalProperties": {
+        "type": "number",
+        "minimum": 0
+      }
+    },
+    "workers_missing": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "../common/definitions.json#/definitions/node_id"
+      }
+    }
+  }
+}

@@ -1,0 +1,93 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://fl-benchmark.local/schemas/hierarchical/cluster_update.json",
+  "title": "Modelo de clúster",
+  "description": "Agregador de clúster → raíz (04 ADR-09). Modelo del clúster con n = Σn_k y tau = τ̄_c = Σn_kτ_k/Σn_k, de modo que la raíz aplica la misma regla (Eq. 1 / Eq. 3) que si recibiera los modelos de los nodos.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "msg_type",
+    "experiment_id",
+    "topology",
+    "sender_id",
+    "recipient_id",
+    "seq",
+    "round",
+    "cluster_id",
+    "n_samples",
+    "tau",
+    "sum_n_tau",
+    "members",
+    "missing",
+    "metrics",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "../common/definitions.json#/definitions/schema_version"
+    },
+    "msg_type": {
+      "const": "CLUSTER_UPDATE"
+    },
+    "experiment_id": {
+      "$ref": "../common/definitions.json#/definitions/experiment_id"
+    },
+    "topology": {
+      "$ref": "../common/definitions.json#/definitions/topology"
+    },
+    "sender_id": {
+      "$ref": "../common/definitions.json#/definitions/node_id"
+    },
+    "recipient_id": {
+      "$ref": "../common/definitions.json#/definitions/recipient_id"
+    },
+    "seq": {
+      "$ref": "../common/definitions.json#/definitions/seq"
+    },
+    "round": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "cluster_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]{1,32}$"
+    },
+    "n_samples": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "tau": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "sum_n_tau": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "members": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "../common/definitions.json#/definitions/node_id"
+      }
+    },
+    "missing": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "../common/definitions.json#/definitions/node_id"
+      }
+    },
+    "metrics": {
+      "$ref": "../common/definitions.json#/definitions/local_metrics"
+    },
+    "payload": {
+      "$ref": "../common/definitions.json#/definitions/payload_descriptor"
+    }
+  }
+}
